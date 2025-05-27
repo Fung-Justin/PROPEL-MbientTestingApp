@@ -1,5 +1,6 @@
 package com.example.mbienttestingapp
 
+
 import android.bluetooth.BluetoothManager
 import android.content.*
 import android.os.Bundle
@@ -15,7 +16,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material3.Button
@@ -25,6 +25,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults.topAppBarColors
@@ -36,19 +37,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-
+import bolts.Task
 import com.example.mbienttestingapp.ui.theme.MbientTestingAppTheme
 import com.mbientlab.metawear.MetaWearBoard
+import com.mbientlab.metawear.Route
+import com.mbientlab.metawear.Subscriber
 import com.mbientlab.metawear.android.BtleService
 import com.mbientlab.metawear.android.BtleService.LocalBinder
-import bolts.Task
-import com.mbientlab.metawear.AsyncDataProducer
+import com.mbientlab.metawear.builder.RouteBuilder
+import com.mbientlab.metawear.data.Acceleration
+import com.mbientlab.metawear.module.Timer
+import com.mbientlab.metawear.module.Accelerometer
 import kotlinx.coroutines.delay
-
-import java.util.TimerTask
 
 
 class MainActivity : ComponentActivity(), ServiceConnection {
@@ -59,9 +61,7 @@ class MainActivity : ComponentActivity(), ServiceConnection {
     private var sensor1: MetaWearBoard? = null
     private var sensor2: MetaWearBoard? = null
 
-
-
-
+    var timer: Timer? = sensor1?.getModule(Timer::class.java)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -79,6 +79,8 @@ class MainActivity : ComponentActivity(), ServiceConnection {
             return serviceBinder?.getMetaWearBoard(remoteDevice)?.also { board ->
                 if (macAddress == sensor1Mac) {
                     sensor1 = board
+
+
                 } else if (macAddress == sensor2Mac) {
                     sensor2 = board
                 }
@@ -106,6 +108,16 @@ class MainActivity : ComponentActivity(), ServiceConnection {
             }
 
 
+            LaunchedEffect(isSensor2Connected) {
+                while (isSensor2Connected) {
+                    sensor2?.readRssiAsync()?.continueWith { task ->
+                        sensor2Rssi = task.result.toString()
+                    }
+                    delay(2000)
+                }
+            }
+
+
             MbientTestingAppTheme {
                 Column {
                     Topbar("Mbient Testing App")
@@ -123,6 +135,7 @@ class MainActivity : ComponentActivity(), ServiceConnection {
                                     } else {
                                         Log.i("MainActivity", "Connected")
                                         isSensor1Connected = true
+
                                         sensor1?.readBatteryLevelAsync()?.continueWith { task -> sensor1BatteryLevel = task.result.toString()}
                                     }
                                     null
@@ -140,6 +153,53 @@ class MainActivity : ComponentActivity(), ServiceConnection {
                                 }
                             }
                         })
+
+
+
+                    SensorControl(
+                        sensorName = "Sensor 2",
+                        batteryLevel = sensor2BatteryLevel,
+                        rssi = sensor2Rssi,
+                        isConnected = isSensor2Connected,
+                        onConnectToggle = {
+                            if(!isSensor2Connected) {
+                                val board = retrieveBoard(macAddress = sensor2Mac)
+                                board?.connectAsync()?.continueWith { task ->
+                                    if (task.isFaulted) {
+                                        Log.i("MainActivity", "Failed to connect")
+                                    } else {
+                                        Log.i("MainActivity", "Sensor 2 Connected")
+                                        isSensor2Connected = true
+                                        sensor2?.readBatteryLevelAsync()?.continueWith { task -> sensor2BatteryLevel = task.result.toString()}
+                                    }
+                                    null
+                                }
+                            }else{
+                                sensor2?.disconnectAsync()?.continueWith { task ->
+                                    if (task.isFaulted) {
+                                        Log.i("MainActivity", "Failed to disconnect")
+                                    } else {
+                                        Log.i("MainActivity", "Disconnected")
+                                        isSensor2Connected = false
+                                        sensor2Rssi = "--"
+                                        sensor2BatteryLevel = "--"
+                                    }
+                                }
+                            }
+                        })
+
+                    var checked by remember { mutableStateOf(false) }
+
+                    Switch(
+                        checked = checked, // The current state of the switch (on/off)
+                        onCheckedChange = {
+                            checked = it // Update the state when the switch is toggled
+                            if (sensor1 != null) {
+                                setupAccelerometerRoute(sensor1!!, checked)
+                            }
+                        }
+                    )
+
                 }
             }
         }
@@ -159,8 +219,34 @@ class MainActivity : ComponentActivity(), ServiceConnection {
     override fun onServiceDisconnected(componentName: ComponentName) {}
 }
 
-
-
+fun setupAccelerometerRoute(board: MetaWearBoard, isChecked: Boolean) {
+    val accelerometer = board.getModule(Accelerometer::class.java)
+    if (accelerometer != null) {
+        accelerometer.acceleration().addRouteAsync { source ->
+            source.stream { data, env ->
+                val acceleration = data.value(Acceleration::class.java)
+                if (acceleration != null) {
+                    Log.i("MainActivity", data.value(Acceleration::class.java).toString())
+                }
+            }
+        }.continueWith { task ->
+            if (task.isFaulted) {
+                Log.e("MainActivity", "Failed to configure accelerometer route", task.error)
+            } else {
+                Log.i("MainActivity", "Accelerometer route configured")
+                if (isChecked) {
+                    accelerometer.acceleration().start()
+                    accelerometer.start()
+                } else {
+                    accelerometer.acceleration().stop()
+                }
+            }
+            null
+        }
+    } else {
+        Log.e("MainActivity", "Accelerometer module not found on board")
+    }
+}
 @Composable
 fun SensorControl(
     sensorName: String,
@@ -232,10 +318,6 @@ fun Topbar(title: String) {
 
 
 
-@Preview(showBackground = true)
-@Composable
-fun Preview() {
 
-}
 
 
