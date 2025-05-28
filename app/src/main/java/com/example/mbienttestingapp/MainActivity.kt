@@ -39,14 +39,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import bolts.Task
+
 import com.example.mbienttestingapp.ui.theme.MbientTestingAppTheme
 import com.mbientlab.metawear.MetaWearBoard
-import com.mbientlab.metawear.Route
-import com.mbientlab.metawear.Subscriber
+
 import com.mbientlab.metawear.android.BtleService
 import com.mbientlab.metawear.android.BtleService.LocalBinder
-import com.mbientlab.metawear.builder.RouteBuilder
+
 import com.mbientlab.metawear.data.Acceleration
 import com.mbientlab.metawear.module.Timer
 import com.mbientlab.metawear.module.Accelerometer
@@ -98,14 +97,14 @@ class MainActivity : ComponentActivity(), ServiceConnection {
             var sensor2Rssi by remember { mutableStateOf("--") }
 
 
-            LaunchedEffect(isSensor1Connected) {
-                while (isSensor1Connected) {
-                    sensor1?.readRssiAsync()?.continueWith { task ->
-                        sensor1Rssi = task.result.toString()
-                    }
-                    delay(2000)
-                }
-            }
+//            LaunchedEffect(isSensor1Connected) {
+//                while (isSensor1Connected) {
+//                    sensor1?.readRssiAsync()?.continueWith { task ->
+//                        sensor1Rssi = task.result.toString()
+//                    }
+//                    delay(2000)
+//                }
+//            }
 
 
             LaunchedEffect(isSensor2Connected) {
@@ -224,10 +223,8 @@ fun setupAccelerometerRoute(board: MetaWearBoard, isChecked: Boolean) {
     if (accelerometer != null) {
         accelerometer.acceleration().addRouteAsync { source ->
             source.stream { data, env ->
-                val acceleration = data.value(Acceleration::class.java)
-                if (acceleration != null) {
-                    Log.i("MainActivity", data.value(Acceleration::class.java).toString())
-                }
+                    Log.i("MainActivity", data.value(Acceleration::class.java).toString() + " " + data.formattedTimestamp())
+
             }
         }.continueWith { task ->
             if (task.isFaulted) {
@@ -244,7 +241,7 @@ fun setupAccelerometerRoute(board: MetaWearBoard, isChecked: Boolean) {
             null
         }
     } else {
-        Log.e("MainActivity", "Accelerometer module not found on board")
+        Log.e("MainActivity", "Accelerometer module not found ")
     }
 }
 @Composable
