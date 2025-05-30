@@ -37,6 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.intl.Locale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -47,10 +48,16 @@ import com.mbientlab.metawear.android.BtleService
 import com.mbientlab.metawear.android.BtleService.LocalBinder
 
 import com.mbientlab.metawear.data.Acceleration
-import com.mbientlab.metawear.module.Timer
+import java.io.FileOutputStream
 import com.mbientlab.metawear.module.Accelerometer
 import kotlinx.coroutines.delay
+import java.io.File
+import java.io.IOException
+import java.text.SimpleDateFormat
+import kotlinx.coroutines.*
 
+
+private val ioScope = CoroutineScope(Dispatchers.IO)
 
 class MainActivity : ComponentActivity(), ServiceConnection {
     private var serviceBinder: LocalBinder? = null
@@ -60,7 +67,7 @@ class MainActivity : ComponentActivity(), ServiceConnection {
     private var sensor1: MetaWearBoard? = null
     private var sensor2: MetaWearBoard? = null
 
-    var timer: Timer? = sensor1?.getModule(Timer::class.java)
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -95,7 +102,8 @@ class MainActivity : ComponentActivity(), ServiceConnection {
             var sensor2BatteryLevel by remember { mutableStateOf("--") }
             var sensor1Rssi by remember { mutableStateOf("--") }
             var sensor2Rssi by remember { mutableStateOf("--") }
-
+            var sensor1data = startNewCsvFile("Sensor1", applicationContext)
+            var sensor2data = startNewCsvFile("Sensor2", applicationContext)
 
 //            LaunchedEffect(isSensor1Connected) {
 //                while (isSensor1Connected) {
@@ -187,17 +195,34 @@ class MainActivity : ComponentActivity(), ServiceConnection {
                             }
                         })
 
-                    var checked by remember { mutableStateOf(false) }
+                    var checked1 by remember { mutableStateOf(false) }
+                    var checked2 by remember { mutableStateOf(false) }
+                    Column {
+                        Text(text = "Sensor 1 Accelerometer")
+                        Switch(
+                            checked = checked1, // The current state of the switch (on/off)
+                            onCheckedChange = {
+                                checked1 = it // Update the state when the switch is toggled
+                                if (sensor1 != null) {
 
-                    Switch(
-                        checked = checked, // The current state of the switch (on/off)
-                        onCheckedChange = {
-                            checked = it // Update the state when the switch is toggled
-                            if (sensor1 != null) {
-                                setupAccelerometerRoute(sensor1!!, checked)
+                                    toggleAccelerometerRoute(sensor1!!, checked1, sensor1data)
+                                }
                             }
-                        }
-                    )
+                        )
+                        Text(text = "Sensor 2 Accelerometer")
+                        Switch(
+                            checked = checked2, // The current state of the switch (on/off)
+                            onCheckedChange = {
+                                checked2 = it // Update the state when the switch is toggled
+                                if (sensor2 != null) {
+
+                                    toggleAccelerometerRoute(sensor2!!, checked2, sensor2data)
+                                }
+                            }
+                        )
+                    }
+
+
 
                 }
             }
@@ -218,12 +243,26 @@ class MainActivity : ComponentActivity(), ServiceConnection {
     override fun onServiceDisconnected(componentName: ComponentName) {}
 }
 
-fun setupAccelerometerRoute(board: MetaWearBoard, isChecked: Boolean) {
+fun toggleAccelerometerRoute(board: MetaWearBoard, isChecked: Boolean, csvfile: File) {
     val accelerometer = board.getModule(Accelerometer::class.java)
+    val fileOutputStream = FileOutputStream(csvfile, true) // Open in append mode
+    var batch = mutableListOf<String>()
+    accelerometer.configure()
+        .odr(100f)
+        .range(4f)
+        .commit()
+
     if (accelerometer != null) {
         accelerometer.acceleration().addRouteAsync { source ->
             source.stream { data, env ->
-                    Log.i("MainActivity", data.value(Acceleration::class.java).toString() + " " + data.formattedTimestamp())
+                    var x = data.value(Acceleration::class.java).x().toString()
+                    var y = data.value(Acceleration::class.java).y().toString()
+                    var z = data.value(Acceleration::class.java).z().toString()
+                    val dataString = "$x,$y,$z"+ "," + data.formattedTimestamp() + "\n"
+
+                    fileOutputStream.write(dataString.toByteArray())
+                    Log.i("MainActivity", dataString)
+
 
             }
         }.continueWith { task ->
@@ -244,6 +283,29 @@ fun setupAccelerometerRoute(board: MetaWearBoard, isChecked: Boolean) {
         Log.e("MainActivity", "Accelerometer module not found ")
     }
 }
+
+fun startNewCsvFile(baseFileName: String = "sensor_data", context: Context): File {
+    val headers = listOf("ax", "ay", "az", "Time")
+    val time = SimpleDateFormat("yyyyMMdd_HHmmss").format(java.util.Date())
+    val filename = "${baseFileName}_${time}.csv"
+
+    val directory = context.filesDir
+    var newCSV = File(directory, filename)
+    var fileOutputStream = FileOutputStream(newCSV)
+    Log.i("CsvDataWriter", "Successfully opened CSV file: ${newCSV?.absolutePath}")
+    try {
+        val headerRow = headers.joinToString(",") + "\n"
+        fileOutputStream?.write(headerRow.toByteArray())
+    } catch (e: IOException) {
+        Log.e("CsvDataWriter", "Error writing CSV header", e)
+    }
+    return newCSV
+}
+
+
+
+
+
 @Composable
 fun SensorControl(
     sensorName: String,
