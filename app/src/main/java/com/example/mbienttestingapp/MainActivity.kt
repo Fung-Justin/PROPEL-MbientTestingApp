@@ -58,9 +58,13 @@ import kotlinx.coroutines.*
 
 
 private val ioScope = CoroutineScope(Dispatchers.IO)
+private var sessionFolder: File? = null
 
+private var logFile: File? = null
 class MainActivity : ComponentActivity(), ServiceConnection {
     private var serviceBinder: LocalBinder? = null
+
+
     private val sensor1Mac: String = "E9:9B:AA:92:6A:F5"
     private val sensor2Mac: String = "E2:81:A5:DD:A7:DB"
 
@@ -77,11 +81,15 @@ class MainActivity : ComponentActivity(), ServiceConnection {
             this, Context.BIND_AUTO_CREATE
         )
 
+        val sessionTime = SimpleDateFormat("yyyyMMdd_HHmmss").format(java.util.Date())
+        sessionFolder = File(applicationContext.filesDir, "${sessionTime}_session")
+        sessionFolder?.mkdirs()
+
+        logFile = startNewLogFile("Logs", applicationContext)
         fun retrieveBoard(macAddress: String): MetaWearBoard? {
-            Log.i("retrieveBoard","Retrieving....")
+            logToFile("retrieveBoard: Retrieving....")
             val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
             val remoteDevice = btManager.adapter.getRemoteDevice(macAddress)
-            Log.i("retrieveBoard","Retrieved")
             return serviceBinder?.getMetaWearBoard(remoteDevice)?.also { board ->
                 if (macAddress == sensor1Mac) {
                     sensor1 = board
@@ -90,6 +98,7 @@ class MainActivity : ComponentActivity(), ServiceConnection {
                 } else if (macAddress == sensor2Mac) {
                     sensor2 = board
                 }
+                logToFile("retrieveBoard: Retrieved board for $macAddress")
             }
         }
 
@@ -138,9 +147,9 @@ class MainActivity : ComponentActivity(), ServiceConnection {
                                 val board = retrieveBoard(macAddress = sensor1Mac)
                                 board?.connectAsync()?.continueWith { task ->
                                     if (task.isFaulted) {
-                                        Log.i("MainActivity", "Failed to connect")
+                                        logToFile("MainActivity: Failed to connect Sensor 1")
                                     } else {
-                                        Log.i("MainActivity", "Connected")
+                                        logToFile("MainActivity: Sensor 1 Connected")
                                         isSensor1Connected = true
 
                                         sensor1?.readBatteryLevelAsync()?.continueWith { task -> sensor1BatteryLevel = task.result.toString()}
@@ -150,9 +159,9 @@ class MainActivity : ComponentActivity(), ServiceConnection {
                             }else{
                                 sensor1?.disconnectAsync()?.continueWith { task ->
                                     if (task.isFaulted) {
-                                        Log.i("MainActivity", "Failed to disconnect")
+                                        logToFile("MainActivity: Failed to disconnect Sensor 1")
                                     } else {
-                                        Log.i("MainActivity", "Disconnected")
+                                        logToFile("MainActivity: Sensor 1 Disconnected")
                                         isSensor1Connected = false
                                         sensor1Rssi = "--"
                                         sensor1BatteryLevel = "--"
@@ -173,9 +182,9 @@ class MainActivity : ComponentActivity(), ServiceConnection {
                                 val board = retrieveBoard(macAddress = sensor2Mac)
                                 board?.connectAsync()?.continueWith { task ->
                                     if (task.isFaulted) {
-                                        Log.i("MainActivity", "Failed to connect")
+                                        logToFile("MainActivity: Failed to connect Sensor 2")
                                     } else {
-                                        Log.i("MainActivity", "Sensor 2 Connected")
+                                        logToFile("MainActivity: Sensor 2 Connected")
                                         isSensor2Connected = true
                                         sensor2?.readBatteryLevelAsync()?.continueWith { task -> sensor2BatteryLevel = task.result.toString()}
                                     }
@@ -184,9 +193,9 @@ class MainActivity : ComponentActivity(), ServiceConnection {
                             }else{
                                 sensor2?.disconnectAsync()?.continueWith { task ->
                                     if (task.isFaulted) {
-                                        Log.i("MainActivity", "Failed to disconnect")
+                                        logToFile("MainActivity: Failed to disconnect Sensor 2")
                                     } else {
-                                        Log.i("MainActivity", "Disconnected")
+                                        logToFile("MainActivity: Sensor 2 Disconnected")
                                         isSensor2Connected = false
                                         sensor2Rssi = "--"
                                         sensor2BatteryLevel = "--"
@@ -261,46 +270,65 @@ fun toggleAccelerometerRoute(board: MetaWearBoard, isChecked: Boolean, csvfile: 
                     val dataString = "$x,$y,$z"+ "," + data.formattedTimestamp() + "\n"
 
                     fileOutputStream.write(dataString.toByteArray())
-                    Log.i("MainActivity", dataString)
+                logToFile("MainActivity: Data received - $dataString")
 
 
             }
         }.continueWith { task ->
             if (task.isFaulted) {
-                Log.e("MainActivity", "Failed to configure accelerometer route", task.error)
+                logToFile("MainActivity: ERROR - Failed to configure accelerometer route - ${task.error}")
             } else {
-                Log.i("MainActivity", "Accelerometer route configured")
+                logToFile("MainActivity: Accelerometer route configured for board ${board.macAddress}")
                 if (isChecked) {
                     accelerometer.acceleration().start()
                     accelerometer.start()
                 } else {
                     accelerometer.acceleration().stop()
+                    accelerometer.stop()
                 }
             }
             null
         }
     } else {
-        Log.e("MainActivity", "Accelerometer module not found ")
+        logToFile("MainActivity: ERROR - Accelerometer module not found on board ${board.macAddress}")
     }
 }
+
+
 
 fun startNewCsvFile(baseFileName: String = "sensor_data", context: Context): File {
     val headers = listOf("ax", "ay", "az", "Time")
     val time = SimpleDateFormat("yyyyMMdd_HHmmss").format(java.util.Date())
     val filename = "${baseFileName}_${time}.csv"
 
-    val directory = context.filesDir
+    val directory = sessionFolder ?: context.filesDir // Use sessionFolder if available, otherwise default
+
     var newCSV = File(directory, filename)
     var fileOutputStream = FileOutputStream(newCSV)
-    Log.i("CsvDataWriter", "Successfully opened CSV file: ${newCSV?.absolutePath}")
+    logToFile("CsvDataWriter: Successfully opened CSV file: ${newCSV.absolutePath}")
     try {
         val headerRow = headers.joinToString(",") + "\n"
-        fileOutputStream?.write(headerRow.toByteArray())
+        fileOutputStream.write(headerRow.toByteArray())
     } catch (e: IOException) {
-        Log.e("CsvDataWriter", "Error writing CSV header", e)
+        logToFile("CsvDataWriter: ERROR - Error writing CSV header - ${e.message}")
     }
     return newCSV
 }
+
+fun startNewLogFile(baseFileName: String = "Logs", context: Context): File {
+    val time = SimpleDateFormat("yyyyMMdd_HHmmss").format(java.util.Date())
+    val filename = "${baseFileName}_${time}.txt"
+
+    val directory = sessionFolder ?: context.filesDir // Use sessionFolder if available, otherwise default
+    val newLogFile = File(directory, filename)
+    Log.i("LogFileCreator", "Log file created at: ${newLogFile.absolutePath}") // Keep one Log.i for initial creation
+    return newLogFile
+}
+
+fun logToFile(message: String) {
+    logFile?.appendText("${SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(java.util.Date())} - $message\n")
+}
+
 
 
 
