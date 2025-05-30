@@ -37,7 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.intl.Locale
+
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -53,11 +53,11 @@ import com.mbientlab.metawear.module.Accelerometer
 import kotlinx.coroutines.delay
 import java.io.File
 import java.io.IOException
-import java.text.SimpleDateFormat
-import kotlinx.coroutines.*
 
 
-private val ioScope = CoroutineScope(Dispatchers.IO)
+import java.text.DateFormat.getDateTimeInstance
+
+
 private var sessionFolder: File? = null
 
 private var logFile: File? = null
@@ -81,7 +81,7 @@ class MainActivity : ComponentActivity(), ServiceConnection {
             this, Context.BIND_AUTO_CREATE
         )
 
-        val sessionTime = SimpleDateFormat("yyyyMMdd_HHmmss").format(java.util.Date())
+        val sessionTime = getDateTimeInstance().format(java.util.Date())
         sessionFolder = File(applicationContext.filesDir, "${sessionTime}_session")
         sessionFolder?.mkdirs()
 
@@ -255,7 +255,7 @@ class MainActivity : ComponentActivity(), ServiceConnection {
 fun toggleAccelerometerRoute(board: MetaWearBoard, isChecked: Boolean, csvfile: File) {
     val accelerometer = board.getModule(Accelerometer::class.java)
     val fileOutputStream = FileOutputStream(csvfile, true) // Open in append mode
-    var batch = mutableListOf<String>()
+
     accelerometer.configure()
         .odr(100f)
         .range(4f)
@@ -298,7 +298,7 @@ fun toggleAccelerometerRoute(board: MetaWearBoard, isChecked: Boolean, csvfile: 
 
 fun startNewCsvFile(baseFileName: String = "sensor_data", context: Context): File {
     val headers = listOf("ax", "ay", "az", "Time")
-    val time = SimpleDateFormat("yyyyMMdd_HHmmss").format(java.util.Date())
+    val time = getDateTimeInstance().format(java.util.Date())
     val filename = "${baseFileName}_${time}.csv"
 
     val directory = sessionFolder ?: context.filesDir // Use sessionFolder if available, otherwise default
@@ -316,7 +316,7 @@ fun startNewCsvFile(baseFileName: String = "sensor_data", context: Context): Fil
 }
 
 fun startNewLogFile(baseFileName: String = "Logs", context: Context): File {
-    val time = SimpleDateFormat("yyyyMMdd_HHmmss").format(java.util.Date())
+    val time = getDateTimeInstance().format(java.util.Date())
     val filename = "${baseFileName}_${time}.txt"
 
     val directory = sessionFolder ?: context.filesDir // Use sessionFolder if available, otherwise default
@@ -326,7 +326,7 @@ fun startNewLogFile(baseFileName: String = "Logs", context: Context): File {
 }
 
 fun logToFile(message: String) {
-    logFile?.appendText("${SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(java.util.Date())} - $message\n")
+    logFile?.appendText("${getDateTimeInstance().format(java.util.Date())} - $message\n")
 }
 
 
