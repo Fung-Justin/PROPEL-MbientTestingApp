@@ -9,66 +9,20 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material.icons.Icons
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults.topAppBarColors
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-
 import com.example.mbienttestingapp.ui.theme.MbientTestingAppTheme
 import com.mbientlab.metawear.MetaWearBoard
-
 import com.mbientlab.metawear.android.BtleService
 import com.mbientlab.metawear.android.BtleService.LocalBinder
 
-import com.mbientlab.metawear.data.Acceleration
 import java.io.FileOutputStream
-import com.mbientlab.metawear.module.Accelerometer
-import kotlinx.coroutines.delay
 import java.io.File
 import java.io.IOException
-
-
-import java.text.DateFormat.getDateTimeInstance
-import java.time.Instant
-
 
 private var sessionFolder: File? = null
 
 private var logFile: File? = null
 class MainActivity : ComponentActivity(), ServiceConnection {
     private var serviceBinder: LocalBinder? = null
-
-
-
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -84,31 +38,25 @@ class MainActivity : ComponentActivity(), ServiceConnection {
 
         logFile = startNewLogFile("Logs", sessionTime.toString(), applicationContext)
 
-        fun retrieveBoard(sensor: Sensor): MetaWearBoard? {
-            logToFile("retrieveBoard: Retrieving....")
-            val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-            val remoteDevice = btManager.adapter.getRemoteDevice(sensor.macAddress)
-            return serviceBinder?.getMetaWearBoard(remoteDevice)?.also { board ->
-
-                sensor.imu = board
-                logToFile(
-                    "retrieveBoard: Retrieved board for $sensor.macAddress"
-                )
-            }
-        }
+        fetchBoards()
+//        fun retrieveBoard(sensor: Sensor): MetaWearBoard? {
+//            logToFile("retrieveBoard: Retrieving....")
+//            val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+//            val remoteDevice = btManager.adapter.getRemoteDevice(sensor.macAddress)
+//            return serviceBinder?.getMetaWearBoard(remoteDevice)?.also { board ->
+//
+//                sensor.imu = board
+//                logToFile(
+//                    "retrieveBoard: Retrieved board for $sensor.macAddress"
+//                )
+//            }
+//        }
 
 
         enableEdgeToEdge()
         setContent {
             MbientTestingAppTheme {
-                Column {
-                    UI().Topbar(title = "Mbient Testing App")
-                    LazyColumn {
-                        items(items = sensorMap.values.toList(), key = { it.macAddress }) { sensor ->
-                            UI().sensorCard(sensor = sensor, onConnectToggle = { toggleConnect(sensor) }, modifier = Modifier)
-                        }
-                    }
-                }
+               MainView()
             }
         }
     }
@@ -125,6 +73,31 @@ class MainActivity : ComponentActivity(), ServiceConnection {
     }
 
     override fun onServiceDisconnected(componentName: ComponentName) {}
+
+    private fun fetchBoards(){
+        logToFile("retrieveBoard: Retrieving....")
+        val btManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
+
+        macAddress.forEachIndexed { idx, address ->
+            val remoteDevice = btManager.adapter.getRemoteDevice(address)
+
+            serviceBinder?.getMetaWearBoard(remoteDevice)?.also { board ->
+
+                val sensor = Sensor(
+                    address,
+                    "Sensor${idx+1}",
+                    board
+                )
+
+                addSensor(sensor)
+
+                logToFile(
+                    "retrieveBoard: Retrieved board for $address"
+                )
+            }
+
+        }
+    }
 }
 
 
