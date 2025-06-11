@@ -9,16 +9,29 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
 import com.example.mbienttestingapp.ui.theme.MbientTestingAppTheme
 import com.mbientlab.metawear.MetaWearBoard
 import com.mbientlab.metawear.android.BtleService
 import com.mbientlab.metawear.android.BtleService.LocalBinder
+import com.mbientlab.metawear.module.Accelerometer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
 
 import java.io.FileOutputStream
 import java.io.File
 import java.io.IOException
+import java.util.LinkedList
 
-private var sessionFolder: File? = null
+ var sessionFolder: File? = null
 
 private var logFile: File? = null
 class MainActivity : ComponentActivity(), ServiceConnection {
@@ -38,25 +51,17 @@ class MainActivity : ComponentActivity(), ServiceConnection {
 
         logFile = startNewLogFile("Logs", sessionTime.toString(), applicationContext)
 
-        fetchBoards()
-//        fun retrieveBoard(sensor: Sensor): MetaWearBoard? {
-//            logToFile("retrieveBoard: Retrieving....")
-//            val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-//            val remoteDevice = btManager.adapter.getRemoteDevice(sensor.macAddress)
-//            return serviceBinder?.getMetaWearBoard(remoteDevice)?.also { board ->
-//
-//                sensor.imu = board
-//                logToFile(
-//                    "retrieveBoard: Retrieved board for $sensor.macAddress"
-//                )
-//            }
-//        }
+
 
 
         enableEdgeToEdge()
         setContent {
             MbientTestingAppTheme {
-               MainView()
+
+
+                    MainView()
+
+
             }
         }
     }
@@ -70,59 +75,42 @@ class MainActivity : ComponentActivity(), ServiceConnection {
     override fun onServiceConnected(name: ComponentName, service: IBinder) {
         // Typecast the binder to the service's LocalBinder class
         serviceBinder = service as BtleService.LocalBinder
+        fetchBoards()
     }
 
     override fun onServiceDisconnected(componentName: ComponentName) {}
 
     private fun fetchBoards(){
         logToFile("retrieveBoard: Retrieving....")
-        val btManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
+        val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        Log.i("Board", "fetching boards!")
+
+        val boardQueue = LinkedList<Pair<MetaWearBoard, Int>>()
 
         macAddress.forEachIndexed { idx, address ->
             val remoteDevice = btManager.adapter.getRemoteDevice(address)
 
+            Log.i("Board", "Getting board for $address, set remote device")
+
             serviceBinder?.getMetaWearBoard(remoteDevice)?.also { board ->
-
-                val sensor = Sensor(
-                    address,
-                    "Sensor${idx+1}",
-                    board
-                )
-
-                addSensor(sensor)
-
-                logToFile(
-                    "retrieveBoard: Retrieved board for $address"
-                )
+                logToFile("retrieveBoard: Retrieved board for $address")
+                boardQueue.add(Pair(board, idx))
             }
-
+        }
+        CoroutineScope(Dispatchers.IO).launch {
+            while (boardQueue.isNotEmpty()) {
+                val (board, idx) = boardQueue.remove()
+                logToFile("retrieveBoard: attempting to connect with Sensor ${idx + 1}")
+                connect(board, idx)
+            }
         }
     }
 }
 
 
-fun startNewCsvFile(baseFileName: String = "sensor_data",time: String, context: Context): File {
-    val headers = listOf("ax", "ay", "az", "Time")
 
-    val filename = "${baseFileName}_${time}.csv"
 
-    val directory = sessionFolder ?: context.filesDir // Use sessionFolder if available, otherwise default
 
-    var newCSV = File(directory, filename)
-    var fileOutputStream = FileOutputStream(newCSV)
-    logToFile(
-        "CsvDataWriter: Successfully opened CSV file"
-    )
-    try {
-        val headerRow = headers.joinToString(",") + "\n"
-        fileOutputStream.write(headerRow.toByteArray())
-    } catch (e: IOException) {
-        logToFile(
-            "CsvDataWriter: ERROR - Error writing CSV header "
-        )
-    }
-    return newCSV
-}
 
 fun startNewLogFile(baseFileName: String = "Logs", time: String, context: Context): File {
 
@@ -133,6 +121,7 @@ fun startNewLogFile(baseFileName: String = "Logs", time: String, context: Contex
     Log.i("LogFileCreator", "Log file created at: ") // Keep one Log.i for initial creation
     return newLogFile
 }
+
 
 fun logToFile(message: String) {
     val time = System.currentTimeMillis()

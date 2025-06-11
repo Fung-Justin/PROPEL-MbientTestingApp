@@ -55,13 +55,11 @@ fun MainView(){
             Modifier.fillMaxWidth().padding(paddingValues)
         ) {
             LazyColumn {
-                items(items = sensors.values.toList(), key = { it.macAddress }) { sensor ->
+                items(items = sensors.values.toList(), key = { it.macAddress }) {sensor ->
                     SensorCard(
                         sensor = sensor,
                         onConnectToggle = {
-                            scope.launch {
-                                if (sensor.isConnected) disconnect(sensor) else connect(sensor)
-                            }
+                            disconnect(sensor)
                         }
                     )
                 }
@@ -118,7 +116,7 @@ fun SensorCard(
                 .fillMaxWidth()
                 .height(45.dp)
         ) {
-            Text(text = if (sensor.isConnected) "Disconnect" else "Connect")
+            Text(text = if (sensor.isConnected) "Connected" else "Disconnected")
         }
 
         Text(text = "Stream Data", modifier = Modifier.padding(start = 15.dp, end = 15.dp))
@@ -134,7 +132,7 @@ fun SensorCard(
                     showDialog = true
                     sensor.isStreaming = false
                 }else{
-                    sensor.toggleAccelerometerRoute()
+                    collectData(sensor)
                 }
             }
 
@@ -156,6 +154,8 @@ fun Topbar() {
         ),
         title = {
             Text("Mbient Testing App")
+
+
         }
     )
 }
