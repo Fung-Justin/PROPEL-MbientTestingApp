@@ -1,5 +1,6 @@
 package com.example.mbienttestingapp
 
+import android.annotation.SuppressLint
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -67,6 +68,7 @@ class Sensor(val macAddress: String, val sensorName: String = "", val imu: MetaW
         return super.toString() + " " + addon
     }
 
+    @SuppressLint("SuspiciousIndentation")
     fun updateBatRssi(){
         CoroutineScope(Dispatchers.IO).launch {
             while(isConnected) {
@@ -80,14 +82,13 @@ class Sensor(val macAddress: String, val sensorName: String = "", val imu: MetaW
             while(isConnected){
 
             rssi = imu.readRssiAsync().await().toString()
-
                 delay(1000)
                 }
         }
     }
 
     fun startNewCsvFile(): File {
-        val headers = listOf("angVelo", "ax", "ay", "az", "Time")
+        val headers = listOf(" aVx"," aVy"," aVz"," aVTime", " ax", " ay", " az", " aTime")
 
         val filename = "${sensorName.replace(" ", "")}data_${System.currentTimeMillis()}.csv"
 
@@ -247,67 +248,38 @@ fun disconnect(sensor: Sensor){
 }
 
 fun writeData(sensor: Sensor) {
-    var fileOutputStream = FileOutputStream(sensor.sensorData,true)
-    var writing = true
-    var writing2 = true
-    val angChannel = Channel<String>()
-    val accChannel = Channel<String>()
+    var fileOutputStream = FileOutputStream(sensor.sensorData, true)
+    var fileSize = 0
+//
 
-    Log.i("Board", "Accelerometer Length ${sensor.data[0].size} \n Gyroscope Length ${sensor.data[1].size}")
-    val gyro = ArrayList<Data>(sensor.data[1])
-    val acc = ArrayList<Data>(sensor.data[0])
-    Log.i("Board", "Gyro ArrayList:")
-    for (data in gyro) {
-        val angularVelocity = data.value(AngularVelocity::class.java)
-        Log.i("Board", "  Timestamp: ${data.timestamp().timeInMillis}, X: ${angularVelocity.x()}, Y: ${angularVelocity.y()}, Z: ${angularVelocity.z()} \n")
-    }
-    Log.i("Board", "Acc ArrayList:")
-    for (data in acc) {
-        val acceleration = data.value(Acceleration::class.java)
-        Log.i(
-            "Board",
-            "  Timestamp: ${data.timestamp().timeInMillis}, X: ${acceleration.x()}, Y: ${acceleration.y()}, Z: ${acceleration.z()}"
-        )
+    if(sensor.data[0].size <= sensor.data[1].size){
+        fileSize = sensor.data[0].size
+    }else{
+        fileSize = sensor.data[1].size
     }
 
 
-    sensor.data[1].clear()
-    sensor.data[0].clear()
 
-    CoroutineScope(Dispatchers.IO).launch {
-        for (data in gyro) {
-            var aVx = data.value(AngularVelocity::class.java).x().toString()
-            var aVy = data.value(AngularVelocity::class.java).y().toString()
-            var aVz = data.value(AngularVelocity::class.java).z().toString()
-            var timeInMillis = data.timestamp().timeInMillis
-            angChannel.send("$aVx, $aVy, $aVz, $timeInMillis ")
-        }
-        writing2 = false
-    }
-    CoroutineScope(Dispatchers.IO).launch {
-        for (data in acc) {
-            var x = data.value(Acceleration::class.java).x().toString()
-            var y = data.value(Acceleration::class.java).y().toString()
-            var z = data.value(Acceleration::class.java).z().toString()
-            var timeInMillis = data.timestamp().timeInMillis
-            var accDataString = "$x, $y, $z" + ", " +  "$timeInMillis \n"
-            accChannel.send(accDataString)
-        }
-        writing = false
+    for (i in 0..fileSize-1) {
+        var gyroData = sensor.data[1][i].value(AngularVelocity::class.java)
+        var accData = sensor.data[0][i].value(Acceleration::class.java)
+
+        var aVx = gyroData.x().toString()
+        var aVy = gyroData.y().toString()
+        var aVz = gyroData.z().toString()
+        var x = accData.x().toString()
+        var y = accData.y().toString()
+        var z = accData.z().toString()
 
 
-    }
-    CoroutineScope(Dispatchers.IO).launch {
-        var count = 0
-        while(writing && writing2) {
-            if(count == 0) Log.i("Board", " acc:$accChannel.receive(), ang: $angChannel.receive()")
-            var dataString = accChannel.receive().toString() + angChannel.receive().toString()
-            fileOutputStream.write(dataString.toByteArray())
-            count++
-        }
+        var angDataString = "$aVx, $aVy, $aVz, ${sensor.data[1][i].timestamp().timeInMillis}, "
+        var accDataString = "$x, $y, $z" + ", " + "${sensor.data[0][i].timestamp().timeInMillis} \n"
+        var dataString = angDataString+ accDataString
+        fileOutputStream.write(dataString.toByteArray())
     }
 
 
 }
+
 
 

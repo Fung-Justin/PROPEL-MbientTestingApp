@@ -64,11 +64,48 @@ fun MainView(){
                     )
                 }
             }
+
+            streamToggle(sensors.values.toList())
         }
     }
 }
 
+@Composable
+fun streamToggle(sensorList: List<Sensor>){
 
+    var showDialog by remember { mutableStateOf(false) }
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column (horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth().padding(15.dp)){
+            Text(text = "Stream Data", modifier = Modifier.padding(bottom = 8.dp))
+            Switch(
+                modifier = Modifier
+                    .height(45.dp),
+                checked = sensorList.all { it.isStreaming },
+                onCheckedChange = {
+                    sensorList.forEach { sensor -> sensor.isStreaming = !sensor.isStreaming }
+
+                    if (sensorList.any { it.isStreaming } && !sensorList.any { it.isConnected }) {
+                        showDialog = true
+                        sensorList.forEach { sensor -> sensor.isStreaming = false }
+                    } else {
+                        collectData(sensorList[0])
+                        collectData(sensorList[1])
+                    }
+                }
+
+            )
+        }
+    }
+
+    if (showDialog) {
+        AlertDialog("A sensor is not connected", onDismiss = { showDialog = false })
+    }
+}
 
 @Composable
 fun SensorCard(
@@ -119,28 +156,29 @@ fun SensorCard(
             Text(text = if (sensor.isConnected) "Connected" else "Disconnected")
         }
 
-        Text(text = "Stream Data", modifier = Modifier.padding(start = 15.dp, end = 15.dp))
-        Switch(
-            modifier = Modifier
-                .padding(start = 15.dp, end = 15.dp, bottom = 15.dp)
-                .height(45.dp),
-            checked = sensor.isStreaming, // The current state of the switch (on/off)
-            onCheckedChange = {
-                sensor.isStreaming = it
-                // Update the state when the switch is toggled
-                if (sensor.isStreaming && !sensor.isConnected) {
-                    showDialog = true
-                    sensor.isStreaming = false
-                }else{
-                    collectData(sensor)
-                }
-            }
-
-        )
+//        Text(text = "Stream Data", modifier = Modifier.padding(start = 15.dp, end = 15.dp))
+//        Switch(
+//            modifier = Modifier
+//                .padding(start = 15.dp, end = 15.dp, bottom = 15.dp)
+//                .height(45.dp),
+//            checked = sensor.isStreaming, // The current state of the switch (on/off)
+//            onCheckedChange = {
+//                sensor.isStreaming = it
+//                // Update the state when the switch is toggled
+//                if (sensor.isStreaming && !sensor.isConnected) {
+//                    showDialog = true
+//                    sensor.isStreaming = false
+//                }else{
+//                    collectData(sensor)
+//                }
+//            }
+//
+//        )
     }
     if (showDialog) {
         AlertDialog("${sensor.sensorName} is not connected", onDismiss = { showDialog = false })
     }
+
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
