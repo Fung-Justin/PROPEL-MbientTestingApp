@@ -290,11 +290,11 @@ fun StreamControlCard(
             )
 
             // Status indicators
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly
+                verticalArrangement = Arrangement.SpaceEvenly
             ) {
                 StatusChip(
                     label = "Connected",
