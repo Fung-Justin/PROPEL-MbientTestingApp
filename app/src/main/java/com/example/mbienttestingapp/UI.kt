@@ -1,236 +1,448 @@
 package com.example.mbienttestingapp
 
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults.topAppBarColors
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainView(){
-
+fun MainView(viewModel: SensorViewModel) {
     val sensors by sensorList.collectAsState()
-    val scope = rememberCoroutineScope()
+    val allSensorsStreaming by viewModel.allSensorsStreaming.collectAsState()
+    val syncMode by viewModel.syncMode.collectAsState()
 
     Scaffold(
         topBar = {
-            Topbar()
+            TopAppBar(
+                title = { Text("Mbient Testing App") },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    titleContentColor = MaterialTheme.colorScheme.primary,
+                )
+            )
         }
     ) { paddingValues ->
-
         Column(
-            Modifier.fillMaxWidth().padding(paddingValues)
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
         ) {
-            LazyColumn {
-                items(items = sensors.values.toList(), key = { it.macAddress }) {sensor ->
+            // Sync Mode Selection
+            SyncModeCard(
+                currentMode = syncMode,
+                isStreaming = allSensorsStreaming,
+                onModeChange = { newMode ->
+                    viewModel.switchSyncMode(newMode)
+                }
+            )
+
+            // Sensor List
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(items = sensors.values.toList(), key = { it.macAddress }) { sensor ->
                     SensorCard(
                         sensor = sensor,
-                        onConnectToggle = {
-                            disconnect(sensor)
+                        onDisconnect = {
+                            viewModel.disconnectSensor(sensor)
                         }
                     )
                 }
             }
 
-            streamToggle(sensors.values.toList())
+            // Stream Control
+            StreamControlCard(
+                sensors = sensors.values.toList(),
+                isStreaming = allSensorsStreaming,
+                syncMode = syncMode,
+                onStartStop = {
+                    if (allSensorsStreaming) {
+                        viewModel.stopSynchronizedCollection()
+                    } else {
+                        viewModel.startSynchronizedCollection()
+                    }
+                }
+            )
         }
     }
 }
 
 @Composable
-fun streamToggle(sensorList: List<Sensor>){
-
-    var showDialog by remember { mutableStateOf(false) }
+fun SyncModeCard(
+    currentMode: SyncMode,
+    isStreaming: Boolean,
+    onModeChange: (SyncMode) -> Unit
+) {
     Card(
-        modifier = Modifier.fillMaxWidth().padding(20.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
         )
     ) {
-        Column (horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth().padding(15.dp)){
-            Text(text = "Stream Data", modifier = Modifier.padding(bottom = 8.dp))
-            Switch(
-                modifier = Modifier
-                    .height(45.dp),
-                checked = sensorList.all { it.isStreaming },
-                onCheckedChange = {
-                    sensorList.forEach { sensor -> sensor.isStreaming = !sensor.isStreaming }
-
-                    if (sensorList.any { it.isStreaming } && !sensorList.any { it.isConnected }) {
-                        showDialog = true
-                        sensorList.forEach { sensor -> sensor.isStreaming = false }
-                    } else {
-                        collectData(sensorList[0])
-                        collectData(sensorList[1])
-                    }
-                }
-
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Text(
+                text = "Synchronization Mode",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 8.dp)
             )
-        }
-    }
 
-    if (showDialog) {
-        AlertDialog("A sensor is not connected", onDismiss = { showDialog = false })
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                SyncMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = currentMode == mode,
+                        onClick = {
+                            if (!isStreaming) {
+                                onModeChange(mode)
+                            }
+                        },
+                        enabled = !isStreaming,
+                        label = { Text(mode.name) },
+                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
+                    )
+                }
+            }
+
+            if (isStreaming) {
+                Text(
+                    text = "Cannot change mode while streaming",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        }
     }
 }
 
 @Composable
 fun SensorCard(
     sensor: Sensor,
-    onConnectToggle: () -> Unit,
-    modifier: Modifier = Modifier,
+    onDisconnect: () -> Unit
 ) {
-    var showDialog by remember { mutableStateOf(false) }
-
-
-    Card(modifier = modifier.padding(20.dp),
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if(sensor.isConnected) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.tertiaryContainer,
+            containerColor = if (sensor.isConnected)
+                MaterialTheme.colorScheme.surfaceVariant
+            else
+                MaterialTheme.colorScheme.errorContainer
         )
     ) {
-        Row(Modifier.padding(start = 15.dp, end = 15.dp, top = 15.dp, bottom = 8.dp)) {
-            Text(
-                text = sensor.sensorName,
-                fontSize = 24.sp
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            Icon(
-                imageVector = if(sensor.isConnected) Icons.Filled.Check else Icons.Filled.Clear , // Use the plus icon
-                contentDescription = "Add", // Important for accessibility
-                modifier = Modifier.height(30.dp)
-
-            )
-        }
-        Text( text = "Battery Level: ${sensor.batteryLevel} %",
-            fontSize = 16.sp,
-            modifier = Modifier.padding(top = 17.dp, start = 15.dp, end = 15.dp, bottom = 15.dp)
-        )
-        Text( text = "RSSI: ${sensor.rssi} dBm",
-            fontSize = 16.sp,
-            modifier = Modifier.padding(start = 15.dp, end = 15.dp, bottom = 15.dp)
-        )
-        Button(
-            onClick = onConnectToggle,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (!sensor.isConnected) Color.Red else Color.Green,
-                contentColor = Color.White
-            ),
+        Column(
             modifier = Modifier
-                .padding(start = 15.dp, end = 15.dp, bottom = 15.dp)
                 .fillMaxWidth()
-                .height(45.dp)
+                .padding(16.dp)
         ) {
-            Text(text = if (sensor.isConnected) "Connected" else "Disconnected")
-        }
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = sensor.sensorName,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                Icon(
+                    imageVector = if (sensor.isConnected) Icons.Default.Check else Icons.Default.Clear,
+                    contentDescription = if (sensor.isConnected) "Connected" else "Disconnected",
+                    tint = if (sensor.isConnected) Color.Green else Color.Red
+                )
+            }
 
-//        Text(text = "Stream Data", modifier = Modifier.padding(start = 15.dp, end = 15.dp))
-//        Switch(
-//            modifier = Modifier
-//                .padding(start = 15.dp, end = 15.dp, bottom = 15.dp)
-//                .height(45.dp),
-//            checked = sensor.isStreaming, // The current state of the switch (on/off)
-//            onCheckedChange = {
-//                sensor.isStreaming = it
-//                // Update the state when the switch is toggled
-//                if (sensor.isStreaming && !sensor.isConnected) {
-//                    showDialog = true
-//                    sensor.isStreaming = false
-//                }else{
-//                    collectData(sensor)
-//                }
-//            }
-//
-//        )
-    }
-    if (showDialog) {
-        AlertDialog("${sensor.sensorName} is not connected", onDismiss = { showDialog = false })
-    }
+            Spacer(modifier = Modifier.height(8.dp))
 
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun Topbar() {
-
-    TopAppBar(
-        colors = topAppBarColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer,
-            titleContentColor = MaterialTheme.colorScheme.primary,
-        ),
-        title = {
-            Text("Mbient Testing App")
-
-
-        }
-    )
-}
-
-@Composable
-fun AlertDialog(dialogText: String, onDismiss: () -> Unit) {
-    var showDialog by remember { mutableStateOf(true) }
-
-    if (showDialog) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = {
-                showDialog = false
-                onDismiss()
-            },
-            title = {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-
-                    Text(text = dialogText, modifier = Modifier.padding(top = 8.dp, bottom = 8.dp))
+            // Status info
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text(
+                        text = "Battery: ${sensor.batteryLevel}%",
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        text = "RSSI: ${sensor.rssi} dBm",
+                        fontSize = 14.sp
+                    )
                 }
-            },
-            confirmButton = {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Button(onClick = {
-                        showDialog = false
-                        onDismiss()
-                    }) {
-                        Text("Close")
+
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "Mode: ${sensor.syncMode.name}",
+                        fontSize = 14.sp
+                    )
+                    if (sensor.isStreaming) {
+                        Text(
+                            text = "● Recording",
+                            fontSize = 14.sp,
+                            color = Color.Red
+                        )
                     }
                 }
             }
+
+            // Gyroscope status
+            if (!sensor.hasGyroscope) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "No gyroscope",
+                        tint = Color(0xFFFFA500), // Orange
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "No gyroscope detected",
+                        fontSize = 12.sp,
+                        color = Color(0xFFFFA500)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // MAC address info (since we don't have model)
+            Text(
+                text = "MAC: ${sensor.macAddress}",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Disconnect button
+            Button(
+                onClick = onDisconnect,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = sensor.isConnected && !sensor.isStreaming,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error
+                )
+            ) {
+                Text("Disconnect")
+            }
+        }
+    }
+}
+
+@Composable
+fun StreamControlCard(
+    sensors: List<Sensor>,
+    isStreaming: Boolean,
+    syncMode: SyncMode,
+    onStartStop: () -> Unit
+) {
+    var showDialog by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = if (isStreaming) "Data Collection Active" else "Ready to Collect Data",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            // Status indicators
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                StatusChip(
+                    label = "Connected",
+                    value = "${sensors.count { it.isConnected }}/${sensors.size}",
+                    isGood = sensors.all { it.isConnected }
+                )
+                StatusChip(
+                    label = "Mode",
+                    value = syncMode.name,
+                    isGood = true
+                )
+                StatusChip(
+                    label = "Gyroscopes",
+                    value = "${sensors.count { it.hasGyroscope }}/${sensors.size}",
+                    isGood = sensors.all { it.hasGyroscope }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Start/Stop button
+            Button(
+                onClick = {
+                    if (!isStreaming && sensors.any { !it.isConnected }) {
+                        showDialog = true
+                    } else {
+                        onStartStop()
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isStreaming) Color.Red else Color.Green
+                )
+            ) {
+                Text(
+                    text = if (isStreaming) {
+                        when (syncMode) {
+                            SyncMode.STREAMING -> "Stop Streaming"
+                            SyncMode.LOGGING -> "Stop Logging"
+                        }
+                    } else {
+                        when (syncMode) {
+                            SyncMode.STREAMING -> "Start Streaming"
+                            SyncMode.LOGGING -> "Start Logging"
+                        }
+                    },
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            if (isStreaming && syncMode == SyncMode.STREAMING) {
+                Text(
+                    text = "Data is being saved to CSV files",
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            } else if (isStreaming && syncMode == SyncMode.LOGGING) {
+                Text(
+                    text = "Data is being logged on device",
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        }
+    }
+
+    if (showDialog) {
+        NotAllConnectedDialog(
+            sensors = sensors,
+            onDismiss = { showDialog = false }
         )
     }
 }
 
+@Composable
+fun StatusChip(
+    label: String,
+    value: String,
+    isGood: Boolean
+) {
+    Surface(
+        shape = MaterialTheme.shapes.small,
+        color = if (isGood)
+            MaterialTheme.colorScheme.primaryContainer
+        else
+            MaterialTheme.colorScheme.errorContainer
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "$label: ",
+                fontSize = 14.sp
+            )
+            Text(
+                text = value,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
+fun NotAllConnectedDialog(
+    sensors: List<Sensor>,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Sensors Not Connected",
+                style = MaterialTheme.typography.headlineSmall
+            )
+        },
+        text = {
+            Column {
+                Text("The following sensors are not connected:")
+                Spacer(modifier = Modifier.height(8.dp))
+                sensors.filter { !it.isConnected }.forEach { sensor ->
+                    Text(
+                        text = "• ${sensor.sensorName}",
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                val sensorsWithoutGyro = sensors.filter { !it.hasGyroscope }
+                if (sensorsWithoutGyro.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("The following sensors don't have gyroscopes:")
+                    sensorsWithoutGyro.forEach { sensor ->
+                        Text(
+                            text = "• ${sensor.sensorName}",
+                            color = Color(0xFFFFA500) // Orange
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("OK")
+            }
+        }
+    )
+}

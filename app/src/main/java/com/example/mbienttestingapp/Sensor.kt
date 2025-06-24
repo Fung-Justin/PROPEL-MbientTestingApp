@@ -1,39 +1,36 @@
 package com.example.mbienttestingapp
 
-import android.annotation.SuppressLint
-import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import bolts.Task
 import com.mbientlab.metawear.Data
 import com.mbientlab.metawear.MetaWearBoard
+import com.mbientlab.metawear.Route
 import com.mbientlab.metawear.data.Acceleration
 import com.mbientlab.metawear.data.AngularVelocity
-import com.mbientlab.metawear.module.Accelerometer
-import com.mbientlab.metawear.module.Gyro
+import com.mbientlab.metawear.module.*
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.BufferedWriter
 import java.io.File
-import java.io.FileOutputStream
-import java.io.IOException
+import java.io.FileWriter
+import java.util.Collections
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
 
-//dictionary of sensors
-var macAddress: List<String> = listOf(
-    "E9:9B:AA:92:6A:F5", //Sensor 1
-    "E2:81:A5:DD:A7:DB"
+// MAC addresses of your sensors
+val macAddress: List<String> = listOf(
+    "E9:9B:AA:92:6A:F5", // Sensor 1
+    "E2:81:A5:DD:A7:DB"  // Sensor 2
 )
 
+// Global sensor list management
 private val _sensorList = MutableStateFlow<Map<String, Sensor>>(emptyMap())
 val sensorList: StateFlow<Map<String, Sensor>> = _sensorList
 
@@ -43,185 +40,488 @@ fun addSensor(sensor: Sensor) {
     }
 }
 
-class Sensor(val macAddress: String, val sensorName: String = "", val imu: MetaWearBoard) {
+enum class SyncMode {
+    STREAMING,  // Real-time streaming with timestamp alignment
+    LOGGING     // On-board logging for perfect synchronization
+}
 
+class Sensor(
+    val macAddress: String,
+    val sensorName: String = "",
+    val imu: MetaWearBoard
+) {
+    // UI state
     var isConnected by mutableStateOf(false)
     var isStreaming by mutableStateOf(false)
     var batteryLevel by mutableStateOf("-")
     var rssi by mutableStateOf("-")
-    val data: List<ArrayList<Data>> = listOf(ArrayList(), ArrayList(), ArrayList()) //Accelerometer,Gyro, Fusion
+    var syncMode by mutableStateOf(SyncMode.STREAMING)
+    private var isDownloading = false
 
+    // Modules - properly typed
     val accelerometer: Accelerometer = imu.getModule(Accelerometer::class.java)
-    val gyroscope: Gyro = imu.getModule(Gyro::class.java)
+    private val gyroscopeBmi160: GyroBmi160? = imu.getModule(GyroBmi160::class.java)
+    private val gyroscopeBmi270: GyroBmi270? = imu.getModule(GyroBmi270::class.java)
+    val gyro: Gyro? = imu.getModule(Gyro::class.java) // For configuration only
+    val logging: Logging = imu.getModule(Logging::class.java)
+    val settings: Settings = imu.getModule(Settings::class.java)
 
-    var sensorData: File? = startNewCsvFile();
+    // Helper property to check if any gyroscope is available
+    val hasGyroscope: Boolean = gyroscopeBmi160 != null || gyroscopeBmi270 != null
 
-    override fun toString(): String {
+    // Thread-safe data collections for streaming mode
+    val accDataQueue: MutableList<Data> = Collections.synchronizedList(mutableListOf<Data>())
+    val gyroDataQueue: MutableList<Data> = Collections.synchronizedList(mutableListOf<Data>())
 
+    // CSV file management
+    private var csvFile: File? = null
+    private var csvWriter: BufferedWriter? = null
 
+    // Routes for cleanup
+    private var accRoute: Route? = null
+    private var gyroRoute: Route? = null
 
+    init {
+        // Log board information for debugging
+        logToFile("${sensorName}: Board info - MAC: ${imu.macAddress}")
+        logToFile("${sensorName}: Has BMI160 = ${gyroscopeBmi160 != null}")
+        logToFile("${sensorName}: Has BMI270 = ${gyroscopeBmi270 != null}")
+        logToFile("${sensorName}: Has generic Gyro = ${gyro != null}")
 
-        val addon =  "$isConnected, $batteryLevel, $rssi, $isStreaming, $sensorData, $accelerometer, $gyroscope"
-
-
-
-        return super.toString() + " " + addon
-    }
-
-    @SuppressLint("SuspiciousIndentation")
-    fun updateBatRssi(){
-        CoroutineScope(Dispatchers.IO).launch {
-            while(isConnected) {
-
-                batteryLevel = imu.readBatteryLevelAsync().await().toString()
-
-                delay(10000)
-            }
-        }
-        CoroutineScope(Dispatchers.IO).launch {
-            while(isConnected){
-
-            rssi = imu.readRssiAsync().await().toString()
-                delay(1000)
-                }
+        if (!hasGyroscope) {
+            logToFile("WARNING: No gyroscope module found for $sensorName")
         }
     }
 
-    fun startNewCsvFile(): File {
-        val headers = listOf(" aVx"," aVy"," aVz"," aVTime", " ax", " ay", " az", " aTime")
-
-        val filename = "${sensorName.replace(" ", "")}data_${System.currentTimeMillis()}.csv"
-
-        val directory = sessionFolder
-
-        var newCSV = File(directory, filename)
-        var fileOutputStream = FileOutputStream(newCSV)
-        logToFile(
-            "CsvDataWriter: Successfully opened CSV file"
-        )
+    // Configure BLE connection for optimal streaming
+    fun optimizeConnection() {
         try {
-            val headerRow = headers.joinToString(",") + "\n"
-            fileOutputStream.write(headerRow.toByteArray())
-        } catch (e: IOException) {
-            logToFile(
-                "CsvDataWriter: ERROR - Error writing CSV header "
+            settings.editBleConnParams()
+                .minConnectionInterval(7.5f)  // Minimum for high-frequency streaming
+                .maxConnectionInterval(7.5f)  // Keep consistent
+                .commit()
+            logToFile("${sensorName}: BLE connection optimized for streaming")
+        } catch (e: Exception) {
+            logToFile("${sensorName}: Failed to optimize BLE connection - ${e.message}")
+        }
+    }
+
+    // Setup streaming mode with timestamp alignment
+    suspend fun setupStreamingMode(): Boolean {
+        return try {
+            // Configure accelerometer
+            accelerometer.configure()
+                .odr(100f)
+                .range(4f)
+                .commit()
+
+            // Configure gyroscope using generic interface if available
+            gyro?.configure()
+                ?.odr(Gyro.OutputDataRate.ODR_100_HZ)
+                ?.range(Gyro.Range.FSR_2000)
+                ?.commit()
+
+            // Setup accelerometer route
+            val accTask = accelerometer.packedAcceleration().addRouteAsync { source ->
+                source.account().stream { data, env ->
+                    accDataQueue.add(data)
+                }
+            }
+
+            // Setup gyroscope route based on specific type
+            val gyroTask = when {
+                gyroscopeBmi160 != null -> {
+                    gyroscopeBmi160.packedAngularVelocity().addRouteAsync { source ->
+                        source.account().stream { data, env ->
+                            gyroDataQueue.add(data)
+                        }
+                    }
+                }
+                gyroscopeBmi270 != null -> {
+                    gyroscopeBmi270.packedAngularVelocity().addRouteAsync { source ->
+                        source.account().stream { data, env ->
+                            gyroDataQueue.add(data)
+                        }
+                    }
+                }
+                else -> null
+            }
+
+            // Wait for routes to be configured
+            accRoute = accTask.await()
+            gyroRoute = gyroTask?.await()
+
+            logToFile("${sensorName}: Streaming mode configured successfully")
+            true
+        } catch (e: Exception) {
+            logToFile("${sensorName}: ERROR - Failed to setup streaming mode - ${e.message}")
+            false
+        }
+    }
+
+    // Setup logging mode for perfect synchronization
+    suspend fun setupLoggingMode(): Boolean {
+        return try {
+            // Clear any existing logs
+            logging.clearEntries()
+
+            // Configure accelerometer
+            accelerometer.configure()
+                .odr(100f)
+                .range(4f)
+                .commit()
+
+            // Configure gyroscope using generic interface if available
+            gyro?.configure()
+                ?.odr(Gyro.OutputDataRate.ODR_100_HZ)
+                ?.range(Gyro.Range.FSR_2000)
+                ?.commit()
+
+            // Setup logging routes for accelerometer
+            val accTask = accelerometer.packedAcceleration().addRouteAsync { source ->
+                source.log { data, env ->
+                    // During download, this will receive the logged data
+                    if (isDownloading) {
+                        accDataQueue.add(data)
+                    }
+                }
+            }
+
+            // Setup logging routes for gyroscope based on type
+            val gyroTask = when {
+                gyroscopeBmi160 != null -> {
+                    gyroscopeBmi160.packedAngularVelocity().addRouteAsync { source ->
+                        source.log { data, env ->
+                            if (isDownloading) {
+                                gyroDataQueue.add(data)
+                            }
+                        }
+                    }
+                }
+                gyroscopeBmi270 != null -> {
+                    gyroscopeBmi270.packedAngularVelocity().addRouteAsync { source ->
+                        source.log { data, env ->
+                            if (isDownloading) {
+                                gyroDataQueue.add(data)
+                            }
+                        }
+                    }
+                }
+                else -> null
+            }
+
+            // Wait for routes to be configured
+            accRoute = accTask.await()
+            gyroRoute = gyroTask?.await()
+
+            logToFile("${sensorName}: Logging mode configured successfully")
+            true
+        } catch (e: Exception) {
+            logToFile("${sensorName}: ERROR - Failed to setup logging mode - ${e.message}")
+            false
+        }
+    }
+
+    // Start data collection based on current mode
+    fun startDataCollection() {
+        when (syncMode) {
+            SyncMode.STREAMING -> startStreaming()
+            SyncMode.LOGGING -> startLogging()
+        }
+        isStreaming = true
+    }
+
+    // Stop data collection
+    fun stopDataCollection() {
+        when (syncMode) {
+            SyncMode.STREAMING -> stopStreaming()
+            SyncMode.LOGGING -> stopLogging()
+        }
+        isStreaming = false
+    }
+
+    private fun startStreaming() {
+        try {
+            accelerometer.packedAcceleration().start()
+            accelerometer.start()
+
+            when {
+                gyroscopeBmi160 != null -> {
+                    gyroscopeBmi160.packedAngularVelocity().start()
+                    gyroscopeBmi160.start()
+                }
+                gyroscopeBmi270 != null -> {
+                    gyroscopeBmi270.packedAngularVelocity().start()
+                    gyroscopeBmi270.start()
+                }
+            }
+
+            startCsvFile()
+            logToFile("${sensorName}: Started streaming at ${System.currentTimeMillis()}")
+        } catch (e: Exception) {
+            logToFile("${sensorName}: ERROR - Failed to start streaming - ${e.message}")
+        }
+    }
+
+    private fun stopStreaming() {
+        try {
+            accelerometer.stop()
+            accelerometer.packedAcceleration().stop()
+
+            when {
+                gyroscopeBmi160 != null -> {
+                    gyroscopeBmi160.stop()
+                    gyroscopeBmi160.packedAngularVelocity().stop()
+                }
+                gyroscopeBmi270 != null -> {
+                    gyroscopeBmi270.stop()
+                    gyroscopeBmi270.packedAngularVelocity().stop()
+                }
+            }
+
+            // Write remaining data
+            writeStreamingData()
+            closeCsvFile()
+
+            logToFile("${sensorName}: Stopped streaming")
+        } catch (e: Exception) {
+            logToFile("${sensorName}: ERROR - Failed to stop streaming - ${e.message}")
+        }
+    }
+
+    private fun startLogging() {
+        try {
+            logging.start(true) // true = overwrite if full
+            accelerometer.packedAcceleration().start()
+            accelerometer.start()
+
+            when {
+                gyroscopeBmi160 != null -> {
+                    gyroscopeBmi160.packedAngularVelocity().start()
+                    gyroscopeBmi160.start()
+                }
+                gyroscopeBmi270 != null -> {
+                    gyroscopeBmi270.packedAngularVelocity().start()
+                    gyroscopeBmi270.start()
+                }
+            }
+
+            logToFile("${sensorName}: Started logging at ${System.currentTimeMillis()}")
+        } catch (e: Exception) {
+            logToFile("${sensorName}: ERROR - Failed to start logging - ${e.message}")
+        }
+    }
+
+    private fun stopLogging() {
+        try {
+            accelerometer.stop()
+            accelerometer.packedAcceleration().stop()
+
+            when {
+                gyroscopeBmi160 != null -> {
+                    gyroscopeBmi160.stop()
+                    gyroscopeBmi160.packedAngularVelocity().stop()
+                }
+                gyroscopeBmi270 != null -> {
+                    gyroscopeBmi270.stop()
+                    gyroscopeBmi270.packedAngularVelocity().stop()
+                }
+            }
+
+            logging.stop()
+
+            logToFile("${sensorName}: Stopped logging")
+        } catch (e: Exception) {
+            logToFile("${sensorName}: ERROR - Failed to stop logging - ${e.message}")
+        }
+    }
+
+    // Download logged data
+    suspend fun downloadLoggedData(): Boolean {
+        return try {
+            isDownloading = true
+            startCsvFile()
+
+            // For MMS boards, flush the page first
+            // According to docs, need to check if it's MMS and call flushPage
+            try {
+                // Try to flush page - will fail if not MMS
+                logging.flushPage()
+                logToFile("${sensorName}: Flushed log page (MMS board)")
+            } catch (_: Exception) {
+                // Not an MMS board or method not available
+                logToFile("${sensorName}: Flush not needed/available")
+            }
+
+            val downloadTask = logging.downloadAsync(100) { nEntriesLeft, totalEntries ->
+                val progress = ((totalEntries - nEntriesLeft) * 100 / totalEntries).toInt()
+                logToFile("${sensorName}: Download progress: $progress%")
+            }
+
+            downloadTask.await()
+
+            // Process downloaded data
+            writeStreamingData()  // Process any queued data
+            closeCsvFile()
+            isDownloading = false
+
+            logToFile("${sensorName}: Downloaded and processed logged data")
+            true
+        } catch (e: Exception) {
+            isDownloading = false
+            logToFile("${sensorName}: ERROR - Failed to download logged data - ${e.message}")
+            false
+        }
+    }
+
+    // CSV file management
+    private fun startCsvFile() {
+        val headers = if (hasGyroscope) {
+            listOf(
+                "timestamp_ms",
+                "acc_x", "acc_y", "acc_z",
+                "gyro_x", "gyro_y", "gyro_z"
+            )
+        } else {
+            listOf(
+                "timestamp_ms",
+                "acc_x", "acc_y", "acc_z"
             )
         }
-        return newCSV
+
+        val sessionFolder = SensorViewModel.getInstance()?.sessionFolder
+        val filename = "${sensorName.replace(" ", "")}_${syncMode.name.lowercase()}_${System.currentTimeMillis()}.csv"
+        csvFile = File(sessionFolder, filename)
+        csvWriter = BufferedWriter(FileWriter(csvFile))
+        csvWriter?.write(headers.joinToString(",") + "\n")
+        csvWriter?.flush()
+
+        logToFile("${sensorName}: Created CSV file: ${csvFile?.name}")
     }
 
-}
-
-
-
-
-fun collectData(sensor: Sensor) {
-    val accelerometer = sensor.accelerometer
-    val gyroscope = sensor.gyroscope
-    if (!sensor.isConnected) {
-        logToFile(
-            "MainActivity: ERROR - Sensor not connected, cannot stream data"
-
-        )
-    }else if (!sensor.isStreaming) {
-        accelerometer.acceleration()?.stop()
-        accelerometer.stop()
-        gyroscope.angularVelocity()?.stop()
-        gyroscope.stop()
-        writeData(sensor)
-        return
+    private fun closeCsvFile() {
+        csvWriter?.close()
+        csvWriter = null
     }
-    CoroutineScope(Dispatchers.IO).launch {
 
+    // Write streaming data with timestamp alignment
+    fun writeStreamingData() {
+        if (accDataQueue.isEmpty() && gyroDataQueue.isEmpty()) return
 
-        accelerometer.configure()
-            .odr(100f)
-            .range(4f)
-            .commit()
-        gyroscope.configure()
-            .odr(Gyro.OutputDataRate.ODR_100_HZ)
-            .range(Gyro.Range.FSR_2000)
-            .commit()
+        val syncWindow = 10L // milliseconds
 
+        // Create copies to avoid concurrent modification
+        val accData = accDataQueue.toList()
+        val gyroData = gyroDataQueue.toList()
 
-            gyroscope.angularVelocity()?.addRouteAsync { source ->
-                source.stream{data, env -> sensor.data[1].add(data)}
+        // Sort by timestamp
+        val sortedAcc = accData.sortedBy { it.timestamp().timeInMillis }
+        val sortedGyro = gyroData.sortedBy { it.timestamp().timeInMillis }
 
-            }?.continueWith { task ->
-                if (task.isFaulted) {
-                    logToFile("MainActivity: ERROR - Failed to configure gyroscope route - ${task.error}")
-                } else {
+        if (hasGyroscope && sortedGyro.isNotEmpty()) {
+            // Write synchronized acc + gyro data
+            var gyroIndex = 0
 
-                    logToFile("MainActivity: Gyroscope route configured for ${sensor.sensorName}, ${System.currentTimeMillis()}")
-                        if (sensor.isStreaming) {
-                            gyroscope.angularVelocity()?.start()
-                            gyroscope.start()
+            sortedAcc.forEach { accSample ->
+                val accTimestamp = accSample.timestamp().timeInMillis
+                val acc = accSample.value(Acceleration::class.java)
+
+                // Find matching gyro sample within time window
+                var matchingGyro: Data? = null
+                while (gyroIndex < sortedGyro.size) {
+                    val gyroSample = sortedGyro[gyroIndex]
+                    val timeDiff = gyroSample.timestamp().timeInMillis - accTimestamp
+
+                    when {
+                        timeDiff < -syncWindow -> gyroIndex++ // Gyro sample is too old
+                        timeDiff > syncWindow -> break // Gyro sample is too far in future
+                        else -> {
+                            matchingGyro = gyroSample
+                            break
                         }
+                    }
+                }
+
+                if (matchingGyro != null) {
+                    val gyro = matchingGyro.value(AngularVelocity::class.java)
+
+                    val row = listOf(
+                        accTimestamp,
+                        acc.x(), acc.y(), acc.z(),
+                        gyro.x(), gyro.y(), gyro.z()
+                    ).joinToString(",")
+
+                    csvWriter?.write(row + "\n")
                 }
             }
+        } else {
+            // Write accelerometer data only
+            sortedAcc.forEach { accSample ->
+                val accTimestamp = accSample.timestamp().timeInMillis
+                val acc = accSample.value(Acceleration::class.java)
 
+                val row = listOf(
+                    accTimestamp,
+                    acc.x(), acc.y(), acc.z()
+                ).joinToString(",")
 
-
-        accelerometer.packedAcceleration()?.addRouteAsync { source ->
-            source.stream { data, env ->
-                sensor.data[0].add(data)
+                csvWriter?.write(row + "\n")
             }
-        }?.continueWith { task ->
-            if (task.isFaulted) {
-                logToFile(
-                    "MainActivity: ERROR - Failed to configure accelerometer route - ${task.error}",
-                )
-            } else {
+        }
 
-                logToFile(
-                    "MainActivity: Accelerometer route configured for ${sensor.sensorName}, ${System.currentTimeMillis()}",
+        csvWriter?.flush()
 
-                    )
+        // Clear processed data
+        accDataQueue.clear()
+        gyroDataQueue.clear()
+    }
 
-                if (sensor.isStreaming) {
-                    accelerometer.acceleration()?.start()
-                    accelerometer.start()
-                }
+    // Battery and RSSI monitoring
+    fun startMonitoring(scope: CoroutineScope) {
+        scope.launch {
+            while (isConnected) {
+                try {
+                    batteryLevel = imu.readBatteryLevelAsync().await().toString()
+                    delay(30000) // Update every 30 seconds
+                } catch (_: Exception) {
+                    batteryLevel = "Error"
                 }
             }
         }
 
-
+        scope.launch {
+            while (isConnected) {
+                try {
+                    rssi = imu.readRssiAsync().await().toString()
+                    delay(5000) // Update every 5 seconds
+                } catch (_: Exception) {
+                    rssi = "Error"
+                }
+            }
+        }
     }
 
+    // Cleanup
+    fun cleanup() {
+        try {
+            accRoute?.remove()
+            gyroRoute?.remove()
+            closeCsvFile()
+            accDataQueue.clear()
+            gyroDataQueue.clear()
+        } catch (e: Exception) {
+            logToFile("${sensorName}: Error during cleanup - ${e.message}")
+        }
+    }
 
-
-
-suspend fun connect(board: MetaWearBoard, idx: Int = 0) {
-    Log.i("Board", "Connecting to ${board.macAddress}")
-
-    val sensorName = "Sensor ${idx + 1}"
-
-    try {
-        board.connectAsync().await() // Wait for connection to complete
-        logToFile("MainActivity: $sensorName Connected")
-
-        val sensor = Sensor(
-            board.macAddress,
-            sensorName,
-            board
-        )
-
-        Log.i("Board", sensor.toString())
-
-        addSensor(sensor)
-
-        sensor.isConnected = true
-        //sensor.updateBatRssi()
-    } catch (e: Exception) {
-        logToFile("MainActivity: Failed to connect $sensorName - ${e.localizedMessage}")
-        connect(board, idx)
+    override fun toString(): String {
+        return "Sensor($sensorName, connected=$isConnected, streaming=$isStreaming, " +
+                "battery=$batteryLevel%, rssi=${rssi}dBm, mode=$syncMode, " +
+                "hasGyro=$hasGyroscope)"
     }
 }
 
-
-
-
+// Extension function for Task await
 suspend fun <T> Task<T>.await(): T {
     return suspendCoroutine { continuation ->
         this.continueWith { task ->
@@ -233,53 +533,3 @@ suspend fun <T> Task<T>.await(): T {
         }
     }
 }
-fun disconnect(sensor: Sensor){
-    sensor.imu.disconnectAsync().continueWith { task ->
-        if (task.isFaulted) {
-            logToFile("MainActivity: Failed to disconnect ${sensor.sensorName}")
-        } else {
-            logToFile("MainActivity: ${sensor.sensorName} Disconnected")
-
-            sensor.isConnected = false
-            sensor.rssi = "--"
-            sensor.batteryLevel = "--"
-        }
-    }
-}
-
-fun writeData(sensor: Sensor) {
-    var fileOutputStream = FileOutputStream(sensor.sensorData, true)
-    var fileSize = 0
-//
-
-    if(sensor.data[0].size <= sensor.data[1].size){
-        fileSize = sensor.data[0].size
-    }else{
-        fileSize = sensor.data[1].size
-    }
-
-
-
-    for (i in 0..fileSize-1) {
-        var gyroData = sensor.data[1][i].value(AngularVelocity::class.java)
-        var accData = sensor.data[0][i].value(Acceleration::class.java)
-
-        var aVx = gyroData.x().toString()
-        var aVy = gyroData.y().toString()
-        var aVz = gyroData.z().toString()
-        var x = accData.x().toString()
-        var y = accData.y().toString()
-        var z = accData.z().toString()
-
-
-        var angDataString = "$aVx, $aVy, $aVz, ${sensor.data[1][i].timestamp().timeInMillis}, "
-        var accDataString = "$x, $y, $z" + ", " + "${sensor.data[0][i].timestamp().timeInMillis} \n"
-        var dataString = angDataString+ accDataString
-        fileOutputStream.write(dataString.toByteArray())
-    }
-
-
-}
-
-
-

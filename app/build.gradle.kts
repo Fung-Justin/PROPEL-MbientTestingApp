@@ -10,7 +10,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.mbienttestingapp"
-        minSdk = 24
+        minSdk = 33
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
@@ -43,7 +43,7 @@ dependencies {
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation("com.parse.bolts:bolts-android:1.4.0")  // Use this specific version for MetaWear
+    implementation(libs.bolts.android)  // Use this specific version for MetaWear
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
@@ -57,5 +57,5 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
-    implementation("com.mbientlab:metawear:3.8.1")
+    implementation(libs.metawear)
 }
