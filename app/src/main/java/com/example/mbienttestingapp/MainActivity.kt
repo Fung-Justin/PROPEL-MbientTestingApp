@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.runtime.*
 import com.example.mbienttestingapp.ui.theme.MbientTestingAppTheme
 import java.io.File
 
@@ -20,16 +21,24 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Set the ViewModel instance for global access
         SensorViewModel.setInstance(sensorViewModel)
 
-        // Set fallback log file
         logFile = sensorViewModel.logFile
 
         enableEdgeToEdge()
         setContent {
             MbientTestingAppTheme {
-                MainView(sensorViewModel)
+                var permissionsGranted by remember { mutableStateOf(false) }
+
+                if (!permissionsGranted) {
+                    PermissionScreen(
+                        onPermissionsGranted = {
+                            permissionsGranted = true
+                        }
+                    )
+                } else {
+                    MainView(sensorViewModel)
+                }
             }
         }
     }

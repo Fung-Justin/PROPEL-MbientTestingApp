@@ -22,6 +22,7 @@ fun MainView(viewModel: SensorViewModel) {
     val sensors by sensorList.collectAsState()
     val allSensorsStreaming by viewModel.allSensorsStreaming.collectAsState()
     val syncMode by viewModel.syncMode.collectAsState()
+    val streamingMode by viewModel.streamingMode.collectAsState()
 
     Scaffold(
         topBar = {
@@ -43,8 +44,12 @@ fun MainView(viewModel: SensorViewModel) {
             SyncModeCard(
                 currentMode = syncMode,
                 isStreaming = allSensorsStreaming,
+                streamingMode = streamingMode,
                 onModeChange = { newMode ->
                     viewModel.switchSyncMode(newMode)
+                },
+                onStreamingModeChange = { newStreamingMode ->
+                    viewModel.switchStreamingMode(newStreamingMode)
                 }
             )
 
@@ -84,7 +89,9 @@ fun MainView(viewModel: SensorViewModel) {
 fun SyncModeCard(
     currentMode: SyncMode,
     isStreaming: Boolean,
-    onModeChange: (SyncMode) -> Unit
+    streamingMode: StreamingMode,
+    onModeChange: (SyncMode) -> Unit,
+    onStreamingModeChange: (StreamingMode) -> Unit
 ) {
     Card(
         modifier = Modifier
@@ -123,6 +130,60 @@ fun SyncModeCard(
                         modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
                     )
                 }
+            }
+
+            // Show streaming options only when in Streaming mode
+            if (currentMode == SyncMode.STREAMING) {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "Streaming Type",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    StreamingMode.entries.forEach { mode ->
+                        FilterChip(
+                            selected = streamingMode == mode,
+                            onClick = {
+                                if (!isStreaming) {
+                                    onStreamingModeChange(mode)
+                                }
+                            },
+                            enabled = !isStreaming,
+                            label = {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(mode.name, fontSize = 12.sp)
+                                    Text(
+                                        when (mode) {
+                                            StreamingMode.PACKED -> "High Speed"
+                                            StreamingMode.ACCOUNTED -> "Accurate Time"
+                                        },
+                                        fontSize = 10.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
+                            modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
+                        )
+                    }
+                }
+
+                // Info text
+                Text(
+                    text = when (streamingMode) {
+                        StreamingMode.PACKED -> "Higher data rate (~100Hz stable)\nLess accurate timestamps"
+                        StreamingMode.ACCOUNTED -> "Precise timestamps\nLower data rate (~66Hz max)"
+                    },
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
             }
 
             if (isStreaming) {
@@ -234,7 +295,7 @@ fun SensorCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // MAC address info (since we don't have model)
+            // MAC address info
             Text(
                 text = "MAC: ${sensor.macAddress}",
                 fontSize = 12.sp,

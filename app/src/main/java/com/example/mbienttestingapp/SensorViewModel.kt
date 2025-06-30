@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.mbientlab.metawear.MetaWearBoard
@@ -28,6 +29,9 @@ class SensorViewModel(application: Application) : AndroidViewModel(application),
     private val _syncMode = MutableStateFlow(SyncMode.STREAMING)
     val syncMode: StateFlow<SyncMode> = _syncMode.asStateFlow()
 
+    private val _streamingMode = MutableStateFlow(StreamingMode.PACKED)
+    val streamingMode: StateFlow<StreamingMode> = _streamingMode.asStateFlow()
+
     // Session management
     var sessionFolder: File? = null
         private set
@@ -41,11 +45,15 @@ class SensorViewModel(application: Application) : AndroidViewModel(application),
 
     private fun initializeSession() {
         val sessionTime = System.currentTimeMillis()
-        sessionFolder = File(getApplication<Application>().filesDir, "${sessionTime}_session")
+
+        val externalDir = getApplication<Application>().getExternalFilesDir(null)
+        sessionFolder = File(externalDir, "MbientData/${sessionTime}_session")
         sessionFolder?.mkdirs()
 
         logFile = File(sessionFolder, "Logs_${sessionTime}.txt")
         logToFile("SensorViewModel: Session initialized at $sessionTime")
+        logToFile("SensorViewModel: Data will be saved to: ${sessionFolder?.absolutePath}")
+
     }
 
     private fun bindService() {
@@ -144,11 +152,38 @@ class SensorViewModel(application: Application) : AndroidViewModel(application),
                 logToFile("$sensorName: Connection failed (attempt $retryCount) - ${e.message}")
 
                 if (retryCount < maxRetries) {
-                    delay(1000L * retryCount) // Exponential backoff
+                    delay(1000L * retryCount)
                 } else {
                     logToFile("$sensorName: ERROR - Max retries reached, giving up")
                 }
             }
+        }
+    }
+
+    fun switchStreamingMode(newMode: StreamingMode) {
+        if (_allSensorsStreaming.value) {
+            logToFile("SensorViewModel: Cannot change streaming mode while streaming")
+            return
+        }
+
+        _streamingMode.value = newMode
+
+        // Update all connected sensors
+        viewModelScope.launch {
+            sensorList.value.values.forEach { sensor ->
+                if (sensor.isConnected) {
+                    sensor.streamingMode = newMode
+                    logToFile("${sensor.sensorName}: Streaming mode set to ${newMode.name}")
+
+                    // If currently in streaming mode, reconfigure
+                    if (sensor.syncMode == SyncMode.STREAMING) {
+                        sensor.cleanup()
+                        delay(200)
+                        sensor.setupStreamingMode()
+                    }
+                }
+            }
+            logToFile("SensorViewModel: All sensors updated to ${newMode.name} streaming")
         }
     }
 
@@ -205,6 +240,7 @@ class SensorViewModel(application: Application) : AndroidViewModel(application),
             val setupTasks = sensors.map { sensor ->
                 async {
                     sensor.syncMode = SyncMode.STREAMING
+                    sensor.streamingMode = _streamingMode.value
                     sensor.setupStreamingMode()
                 }
             }
@@ -264,18 +300,41 @@ class SensorViewModel(application: Application) : AndroidViewModel(application),
 
         _syncMode.value = newMode
 
-        // Reconfigure all connected sensors
         viewModelScope.launch {
+            // Clean up existing routes
             sensorList.value.values.forEach { sensor ->
                 if (sensor.isConnected) {
-                    sensor.syncMode = newMode
-                    when (newMode) {
-                        SyncMode.STREAMING -> sensor.setupStreamingMode()
-                        SyncMode.LOGGING -> sensor.setupLoggingMode()
+                    try {
+                        sensor.cleanup()
+                        delay(200)
+                    } catch (e: Exception) {
+                        logToFile("${sensor.sensorName}: Cleanup error - ${e.message}")
                     }
                 }
             }
-            logToFile("SensorViewModel: Switched to ${newMode.name} mode")
+
+            // Setup new mode
+            sensorList.value.values.forEach { sensor ->
+                if (sensor.isConnected) {
+                    launch {
+                        sensor.syncMode = newMode
+
+                        val success = when (newMode) {
+                            SyncMode.STREAMING -> sensor.setupStreamingMode()
+                            SyncMode.LOGGING -> sensor.setupLoggingMode()
+                        }
+
+                        if (success) {
+                            logToFile("${sensor.sensorName}: Switched to ${newMode.name} mode")
+                        } else {
+                            logToFile("${sensor.sensorName}: ERROR - Failed to switch to ${newMode.name}")
+                        }
+                    }
+                }
+            }
+
+            delay(1000)
+            logToFile("SensorViewModel: Mode switch to ${newMode.name} completed")
         }
     }
 
@@ -340,12 +399,11 @@ fun logToFile(message: String) {
         val logMessage = "$time - $message\n"
 
         // Try to get log file from ViewModel first
-        val logFile = SensorViewModel.getInstance()?.logFile
-            ?: MainActivity.logFile // Fallback for early initialization
+        val logFile = SensorViewModel.getInstance()?.logFile ?: MainActivity.logFile // Fallback for early initialization
 
         logFile?.appendText(logMessage)
-        android.util.Log.d("MbientApp", message)
+        Log.d("MbientApp", message)
     } catch (e: Exception) {
-        android.util.Log.e("MbientApp", "Failed to write to log file: ${e.message}")
+        Log.e("MbientApp", "Failed to write to log file: ${e.message}")
     }
 }
