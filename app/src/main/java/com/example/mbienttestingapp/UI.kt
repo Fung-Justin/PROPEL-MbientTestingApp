@@ -1,5 +1,6 @@
 package com.example.mbienttestingapp
 
+import android.R
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -119,6 +120,9 @@ fun SyncModeCard(
             ) {
                 SyncMode.entries.forEach { mode ->
                     FilterChip(
+                        colors = if (currentMode == mode) FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color.Green
+                        ) else FilterChipDefaults.filterChipColors(),
                         selected = currentMode == mode,
                         onClick = {
                             if (!isStreaming) {
@@ -149,6 +153,8 @@ fun SyncModeCard(
                 ) {
                     StreamingMode.entries.forEach { mode ->
                         FilterChip(
+                            colors = if (streamingMode == mode) FilterChipDefaults.filterChipColors(selectedContainerColor = Color.Green)
+                                     else FilterChipDefaults.filterChipColors(),
                             selected = streamingMode == mode,
                             onClick = {
                                 if (!isStreaming) {
