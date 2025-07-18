@@ -129,37 +129,67 @@ class Sensor(
         }
     }
 
+//    private suspend fun setupPackedStreaming() {
+//        // Packed data - 3 samples per BLE packet, higher throughput
+//        val accTask = accelerometer.packedAcceleration().addRouteAsync { source ->
+//            source.stream { data, env ->
+//                accDataQueue.add(data)
+//            }
+//        }
+//
+//        val gyroTask = when {
+//            gyroscopeBmi160 != null -> {
+//                gyroscopeBmi160.packedAngularVelocity().addRouteAsync { source ->
+//                    source.stream { data, env ->
+//                        gyroDataQueue.add(data)
+//                    }
+//                }
+//            }
+//            gyroscopeBmi270 != null -> {
+//                gyroscopeBmi270.packedAngularVelocity().addRouteAsync { source ->
+//                    source.stream { data, env ->
+//                        gyroDataQueue.add(data)
+//                    }
+//                }
+//            }
+//            else -> null
+//        }
+//
+//        accRoute = accTask.await()
+//        gyroRoute = gyroTask?.await()
+//
+//        logToFile("${sensorName}: Using PACKED streaming (high throughput)")
+//    }
+
     private suspend fun setupPackedStreaming() {
-        // Packed data - 3 samples per BLE packet, higher throughput
-        val accTask = accelerometer.packedAcceleration().addRouteAsync { source ->
-            source.stream { data, env ->
-                accDataQueue.add(data)
-            }
-        }
 
-        val gyroTask = when {
-            gyroscopeBmi160 != null -> {
-                gyroscopeBmi160.packedAngularVelocity().addRouteAsync { source ->
-                    source.stream { data, env ->
-                        gyroDataQueue.add(data)
+        val accProducer  = accelerometer.packedAcceleration()
+        val gyroProducer =  gyroscopeBmi270?.packedAngularVelocity()
+
+        val gyroTask = gyroProducer?.addRouteAsync { source ->
+                    source.buffer().name("gyro-buffer")
+                }?.onSuccessTask {
+                    accProducer.addRouteAsync { source ->
+                        source.fuse("gyro-buffer")
+                            .limit(10)
+                            .stream { data, env ->
+                                val values = data.value(Array<Data>::class.java)
+                                val accVal = values[0]
+                                val gyroVal = values[1]
+
+                                accDataQueue.add(accVal)
+                                gyroDataQueue.add(gyroVal)
+                                logToFile("Data: ${accVal}, ${gyroVal}")
+                            }
                     }
                 }
-            }
-            gyroscopeBmi270 != null -> {
-                gyroscopeBmi270.packedAngularVelocity().addRouteAsync { source ->
-                    source.stream { data, env ->
-                        gyroDataQueue.add(data)
-                    }
-                }
-            }
-            else -> null
-        }
 
-        accRoute = accTask.await()
         gyroRoute = gyroTask?.await()
 
-        logToFile("${sensorName}: Using PACKED streaming (high throughput)")
+        logToFile("$sensorName: Using fused packed streaming")
     }
+
+
 
     private suspend fun setupAccountedStreaming() {
         // Unpacked with accounting - 2 samples per packet, accurate timestamps
@@ -209,14 +239,14 @@ class Sensor(
 
             // Configure sensors
             newAccelerometer.configure()
-                .odr(100f)
+                .odr(200f)
                 .range(4f)
                 .commit()
 
             delay(200)
 
             newGyro?.configure()
-                ?.odr(Gyro.OutputDataRate.ODR_100_HZ)
+                ?.odr(Gyro.OutputDataRate.ODR_200_HZ)
                 ?.range(Gyro.Range.FSR_2000)
                 ?.commit()
 

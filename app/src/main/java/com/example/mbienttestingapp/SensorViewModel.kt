@@ -389,6 +389,7 @@ class SensorViewModel(application: Application) : AndroidViewModel(application),
         fun setInstance(viewModel: SensorViewModel) {
             instance = viewModel
         }
+
     }
 }
 
