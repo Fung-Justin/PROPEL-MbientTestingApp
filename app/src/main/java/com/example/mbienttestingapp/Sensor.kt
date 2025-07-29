@@ -128,7 +128,7 @@ class Sensor(
             false
         }
     }
-
+//
 //    private suspend fun setupPackedStreaming() {
 //        // Packed data - 3 samples per BLE packet, higher throughput
 //        val accTask = accelerometer.packedAcceleration().addRouteAsync { source ->
@@ -161,30 +161,61 @@ class Sensor(
 //        logToFile("${sensorName}: Using PACKED streaming (high throughput)")
 //    }
 
+//    private suspend fun setupPackedStreaming() {
+//
+//        val accProducer  = accelerometer.packedAcceleration()
+//        val gyroProducer =  gyroscopeBmi270?.packedAngularVelocity()
+//
+//        val acctask = gyroProducer?.addRouteAsync { source ->
+//                    source.buffer().name("gyro-buffer")
+//                }?.onSuccessTask {
+//                    accProducer.addRouteAsync { source ->
+//                        source.fuse("gyro-buffer")
+//                            .limit(5)
+//                            .stream { data, env ->
+//                                var values = data.value(Array<Data>::class.java)
+//
+//                                accDataQueue.add(values[0])
+//                                gyroDataQueue.add(values[1])
+//
+//                            }
+//                    }
+//                }
+//
+//        accRoute = acctask?.await()
+//
+//        logToFile("$sensorName: Using fused packed streaming")
+//    }
+
     private suspend fun setupPackedStreaming() {
+        val accProducer = accelerometer.packedAcceleration()
+        var gyroProducer = gyroscopeBmi270?.packedAngularVelocity()
 
-        val accProducer  = accelerometer.packedAcceleration()
-        val gyroProducer =  gyroscopeBmi270?.packedAngularVelocity()
+        if (gyroProducer == null) {
+            gyroProducer = gyroscopeBmi160?.packedAngularVelocity()
+            return
+        }
 
-        val gyroTask = gyroProducer?.addRouteAsync { source ->
-                    source.buffer().name("gyro-buffer")
-                }?.onSuccessTask {
+        val gyroTask = gyroProducer.addRouteAsync { source ->
+            source.buffer().name("gyro-buffer")
+        }.onSuccessTask {
                     accProducer.addRouteAsync { source ->
                         source.fuse("gyro-buffer")
-                            .limit(10)
+                            .limit(5)
                             .stream { data, env ->
-                                val values = data.value(Array<Data>::class.java)
-                                val accVal = values[0]
-                                val gyroVal = values[1]
+                                var values = data.value(Array<Data>::class.java)
 
-                                accDataQueue.add(accVal)
-                                gyroDataQueue.add(gyroVal)
-                                logToFile("Data: ${accVal}, ${gyroVal}")
+                                accDataQueue.add(values[0])
+                                gyroDataQueue.add(values[1])
+
                             }
                     }
                 }
 
-        gyroRoute = gyroTask?.await()
+
+        // Await both tasks
+        gyroRoute = gyroTask.await()
+
 
         logToFile("$sensorName: Using fused packed streaming")
     }
@@ -239,14 +270,14 @@ class Sensor(
 
             // Configure sensors
             newAccelerometer.configure()
-                .odr(200f)
+                .odr(100f)
                 .range(4f)
                 .commit()
 
             delay(200)
 
             newGyro?.configure()
-                ?.odr(Gyro.OutputDataRate.ODR_200_HZ)
+                ?.odr(Gyro.OutputDataRate.ODR_100_HZ)
                 ?.range(Gyro.Range.FSR_2000)
                 ?.commit()
 
@@ -352,10 +383,12 @@ class Sensor(
                             gyroscopeBmi160.angularVelocity().start()
                             gyroscopeBmi160.start()
                         }
+
                         gyroscopeBmi270 != null -> {
                             gyroscopeBmi270.angularVelocity().start()
                             gyroscopeBmi270.start()
                         }
+
                     }
                 }
             }
